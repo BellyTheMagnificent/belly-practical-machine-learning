@@ -1,0 +1,171 @@
+---
+title: "Practical Machine Learning"
+author: "JoseCLee"
+date: "19 September, 2014"
+output: html_document
+---
+
+## Synopsis
+The objective of this assignment is to predict the class of the weight lifter base on the data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.
+
+## Loading and preprocessing the data  
+
+``` {r GET_FILE, echo=FALSE, cache=TRUE}
+
+if(!file.exists(file.path(getwd(), "data")))
+{
+        dir.create(file.path(getwd(), "data"))
+}
+
+training_file = file.path(getwd(), "data/pml-training.csv");
+testing_pfile = file.path(getwd(), "data/pml-testing.csv");
+
+if(!file.exists(training_file)){
+        url <- "https://github.com/BellyTheMagnificent/belly-practical-machine-learning/blob/master/data/pml-training.csv"
+        download.file(url, training_file, method = "curl")
+}
+
+if(!file.exists(testing_pfile)){
+        url <- "https://github.com/BellyTheMagnificent/belly-practical-machine-learning/blob/master/data/pml-testing.csv"
+        download.file(url, testing_pfile, method = "curl")
+}
+```
+
+Loading required libraries into R.   
+``` {r LIBRARY,message=FALSE, eval=TRUE}
+library(ggplot2)
+library(lattice)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(Hmisc)
+library(corrgram)
+library(e1071)
+library(MASS)
+library(randomForest)
+set.seed(8586141)
+```
+
+Read data from csv file. Transform the empty space and ___#DIV/0!___ to NA when loading data into R.
+``` {r LOAD_DATA, echo=TRUE, cache=TRUE}
+raw_training = read.csv(training_file, header=TRUE, na.strings = c(" ","","#DIV/0!"), );
+private_testing = read.csv(testing_pfile, header=TRUE, na.strings = c(" ","","#DIV/0!"));
+```  
+
+## Prepoccess
+
+Combine training and private test data set for preprocessing   
+1. Assign Temporary variables to align the number of variables in both data set   
+2. Join 2 data set   
+3. Take only sensor reading variables.
+```{r PRE_PROCESS_FILTER, cache=TRUE }
+private_testing$classe = NA 
+raw_training$problem_id = NA
+combine = rbind(raw_training, private_testing)
+combine = subset(combine, select = -c(X, user_name, raw_timestamp_part_1,raw_timestamp_part_2,
+                                      cvtd_timestamp,cvtd_timestamp, new_window, num_window))
+```
+
+Taking out variables with large number of NA and transform all variables into numeric data type   
+```{r PRE_PROCESS_TRANSFORM, cache=TRUE}
+predictors = vector()
+for(i in names(combine[,1:152]))
+{        
+        combine[,i] = as.numeric(combine[,i])
+        if (sum(is.na(combine[,i]))/length(combine[,i]) < 0.5)
+        {                
+                predictors = rbind(predictors, i)
+        }
+}
+
+combine = subset(combine, select = c(predictors, "classe", "problem_id"))
+```
+
+Splitting the data back to training and private testing set
+```{r PRE_PROCESS_RESTORE, cache=TRUE}
+train_data = subset(combine, is.na(problem_id)==TRUE)
+train_data = subset(train_data, select = -c(problem_id))
+test_data = subset(combine, problem_id %in% 1:20)
+rownames(test_data) = 1:20
+test_data = subset(train_data, select = -c(classe))
+```
+
+Split training data to training and test set to train model
+```{r PRE_PROCESS_SPLIT,cache=TRUE}
+split = createDataPartition(train_data$classe, list=FALSE, p = 0.7)
+training = train_data[split,]
+testing = train_data[-split,]
+```
+
+## Training Model
+
+I have try on several models and found random forest has the best result although it took hours to train the model. (It took time even i removed the aggregation variables [total, avg, min, etc...] in another attempt.)   
+
+
+### Regression Tree 
+
+``` {r RPART, cache=TRUE}
+fit.rpart = train(classe ~ ., data = training, method = "rpart")
+prp(fit.rpart$finalModel)
+predict.rpart = predict(fit.rpart, newdata = testing)
+confusionMatrix(predict.rpart, testing$classe)
+```
+
+__RPART__ has 54% accuracy.
+
+### Linear Discriminant Analysis
+```{r LDA, cache=TRUE}
+fit.lda = train(classe ~ ., data = training, method = "lda")
+predict.lda = predict(fit.lda, newdata = testing)
+confusionMatrix(predict.lda, testing$classe)
+```
+
+__LDA__ give pretty good score: 70% accuracy
+
+### Random Forest
+
+* Take long hours to train
+
+``` {r RF, cache=TRUE}
+fit.rf = train(classe ~ ., data = training, method = "rf", importance=TRUE)
+print(fit.rf$finalModel)
+predict.rf = predict(fit.rf, newdata = testing)
+```
+
+The accuracy from __RandomForest__ is superb and i worry it could be over-fitting when predict against private data set.   
+Let's take a look on the and find which are importance variables.
+```{r PlotImportance, cache=TRUE}
+varImpPlot(fit.rf$finalModel, type = 2)
+```
+
+I tested the out-of-sample error on the cross-validation set and the result was very encouraging:   
+```{r RF_Result}
+confusionMatrix(predict.rf, testing$classe)
+```
+
+
+## Summary & Submission
+
+At the end of the analyst, predict the private testing set using ___Random Forest___ as it is the model with highest accuracy. The trade off is it taking longer time to train and less intepretability then others model like ___rpart___.    
+
+By using the private test set and the code provided in __Coursera__ platform, I predict it with the ___fit.rf___ model and turn it into 20 answer files.
+
+``` {r Submission, cache=TRUE}
+
+answers = predict(fit.rf, newdata = test_data)
+
+if(!file.exists(file.path(getwd(), "submission")))
+{
+        dir.create(file.path(getwd(), "submission"))
+}
+
+pml_write_files = function(x,y){
+        n = length(x)
+        for(i in 1:n){
+                filename = file.path(y, paste0("problem_id_",i,".txt"))
+                write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+        }
+}
+
+pml_write_files(answers, file.path(getwd(), "submission"))
+```
